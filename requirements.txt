@@ -1,0 +1,5 @@
+httpx[http2]>=0.26
+fastapi>=0.110
+uvicorn>=0.29
+playwright>=1.40
+cryptography>=42

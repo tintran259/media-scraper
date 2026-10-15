@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cào bình luận mạng xã hội</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1c1e21; --muted: #65676b; --line: #e4e6eb;
+    --accent: #1b74e4; --accent-text: #fff; --ok: #1f8a4c; --warn: #b26a00; --err: #d1273c; --info: #1b74e4;
+    --chip: #eef0f3; --bar: #e4e6eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #18191a; --card: #242526; --text: #e4e6eb; --muted: #a8abaf; --line: #3a3b3c;
+      --accent: #2d88ff; --ok: #45bd62; --warn: #f0a33a; --err: #f3425f; --info: #4599ff;
+      --chip: #3a3b3c; --bar: #3a3b3c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
+           background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  header a { color: var(--muted); font-size: 13px; text-decoration: none; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .between { justify-content: space-between; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+           background: var(--chip); color: var(--muted); white-space: nowrap; }
+  .badge.ok { color: var(--ok); } .badge.err { color: var(--err); }
+  .badge.warn { color: var(--warn); } .badge.info { color: var(--info); }
+  .ok-text { color: var(--ok); } .err-text { color: var(--err); } .warn-text { color: var(--warn); }
+  textarea { width: 100%; font: 13px/1.5 ui-monospace, Consolas, monospace; color: var(--text); background: var(--bg);
+             border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; resize: vertical; min-height: 140px; }
+  button, .btn { font: inherit; font-weight: 600; cursor: pointer; border-radius: 8px; padding: 7px 14px;
+           border: 1px solid var(--line); background: var(--chip); color: var(--text); text-decoration: none;
+           display: inline-block; white-space: nowrap; }
+  button:hover, .btn:hover { filter: brightness(0.96); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .sm { padding: 3px 10px; font-size: 12px; }
+  .ghost { background: transparent; }
+  .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  .msgline { min-height: 20px; font-size: 13px; }
+  .table-wrap { overflow-x: auto; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 8px;
+       border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.post { min-width: 240px; max-width: 420px; }
+  td.post a { color: var(--text); font-weight: 600; text-decoration: none; word-break: break-word; }
+  td.post a:hover { color: var(--accent); }
+  .sub { font-size: 12px; color: var(--muted); word-break: break-all; }
+  .log { font: 11px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); margin-top: 4px; word-break: break-all; }
+  .msg { font-size: 12px; margin-top: 4px; }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar { height: 6px; background: var(--bar); border-radius: 3px; overflow: hidden; margin-top: 6px; min-width: 120px; }
+  .bar span { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+  .bar.done span { background: var(--ok); }
+  .bar.indet span { width: 30% !important; animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+  .actions { white-space: nowrap; text-align: right; }
+  .actions > * { margin-left: 4px; }
+  #empty { text-align: center; color: var(--muted); padding: 24px 0 8px; margin: 0; }
+  #conn { background: var(--err); color: #fff; text-align: center; padding: 6px; font-weight: 600; }
+  #adminBar { background: var(--warn); color: #fff; text-align: center; padding: 4px; font-size: 13px; font-weight: 600; }
+  .summary { font-size: 13px; color: var(--muted); }
+  .tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--card); border-bottom: 1px solid var(--line);
+          overflow-x: auto; }
+  .tabs button { border: none; background: none; padding: 12px 16px; font: inherit; font-weight: 600; color: var(--muted);
+                 cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tabs button:hover { color: var(--text); }
+  .tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tabs .soon { font-size: 10px; font-weight: 700; color: var(--muted); background: var(--chip); border-radius: 999px;
+                padding: 1px 6px; margin-left: 6px; vertical-align: middle; }
+  .soon-card { text-align: center; padding: 44px 20px; }
+  .soon-card .big { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+  .soon-card .emoji { font-size: 34px; display: block; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div id="conn" hidden>Mất kết nối tới server.</div>
+<div id="adminBar" hidden>Chế độ admin: đang xem job của tất cả người dùng</div>
+<header>
+  <h1>Cào bình luận mạng xã hội</h1>
+  <a href="/admin">Quản trị</a>
+</header>
+<nav id="tabs" class="tabs"></nav>
+
+<main>
+  <div id="pane-facebook" class="pane">
+  <section class="card">
+    <div class="row between" style="margin:0 0 4px">
+      <h2 style="margin:0">Tài khoản Facebook của bạn</h2>
+      <span id="sessBadge" class="badge">…</span>
+    </div>
+    <p class="hint" id="sessHint">Dán cookie đăng nhập để lấy đầy đủ bình luận. Mỗi người dùng tài khoản riêng của mình.</p>
+    <details id="sessBox">
+      <summary>Thêm / đổi cookie đăng nhập Facebook</summary>
+      <ol>
+        <li>Đăng nhập Facebook bằng <b>tài khoản phụ</b> trên trình duyệt.</li>
+        <li>Cài tiện ích <b>Cookie-Editor</b>, mở ở tab <code>facebook.com</code>, bấm <b>Export</b> (dạng JSON).</li>
+        <li>Dán vào ô dưới rồi bấm Lưu. Hoặc dán chuỗi <code>c_user=...; xs=...</code> lấy từ DevTools.</li>
+      </ol>
+      <textarea id="cookieInput" spellcheck="false" style="min-height:90px"
+        placeholder="Dán cookie JSON hoặc chuỗi c_user=...; xs=..."></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="saveSess" class="primary">Lưu cookie</button>
+        <button id="clearSess">Xoá</button>
+        <span id="sessMsg" class="msgline"></span>
+      </div>
+      <p class="hint">Cookie = quyền truy cập tài khoản, chỉ dùng <b>tài khoản phụ</b>. Cookie được mã hoá khi lưu
+        và tự xoá sau <span id="ttlDays">30</span> ngày.</p>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Dán link bài viết</h2>
+    <textarea id="urls" spellcheck="false" placeholder="Mỗi dòng một link, ví dụ:
+https://www.facebook.com/tenpage/posts/pfbid0abc...
+https://www.facebook.com/groups/123/posts/456/
+https://www.facebook.com/reel/789"></textarea>
+    <div class="row between" style="margin-top:10px">
+      <div class="row">
+        <button id="startBtn" class="primary">Bắt đầu cào</button>
+        <span id="urlCount" class="sub">0 link</span>
+      </div>
+      <span id="formMsg" class="msgline"></span>
+    </div>
+    <p class="hint" id="scopeHint">Hỗ trợ bài viết <b>công khai</b>: trang, nhóm công khai, video, reel. Lấy cả bình luận và phản hồi.</p>
+  </section>
+
+  <section class="card">
+    <div class="row between">
+      <h2 style="margin:0">Tiến độ</h2>
+      <div class="row">
+        <span id="summary" class="summary"></span>
+        <button id="stopAll" class="sm">Dừng tất cả</button>
+        <a class="btn sm primary" id="exportAll" href="/api/export-all">Tải CSV gộp</a>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Bài viết</th><th>Trạng thái</th><th>Bình luận + phản hồi</th><th>Tốc độ</th><th>Thời gian</th><th></th></tr></thead>
+        <tbody id="jobsBody"></tbody>
+      </table>
+    </div>
+    <p id="empty">Chưa có bài nào. Dán link ở trên rồi bấm “Bắt đầu cào”.</p>
+  </section>
+  </div>
+
+  <div id="pane-threads" class="pane" hidden></div>
+  <div id="pane-instagram" class="pane" hidden></div>
+  <div id="pane-x" class="pane" hidden></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = n => (n ?? 0).toLocaleString('vi-VN');
+const fmtDur = sec => {
+  if (sec == null || !isFinite(sec)) return '';
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
+};
+const STATUS = {
+  queued: ['Đang chờ', ''], resolving: ['Đang mở bài viết', 'info'], running: ['Đang cào', 'info'],
+  done: ['Xong', 'ok'], error: ['Lỗi', 'err'], stopped: ['Đã dừng', 'warn'],
+};
+const ACTIVE = ['queued', 'resolving', 'running'];
+const ORDER = { all: 'Tất cả', newest: 'Mới nhất' };
+const STOP = { end: 'hết', no_page_info: 'trang lỗi', cursor_stuck: 'kẹt cursor' };
+
+// admin view: /?all=1 with the token saved by /admin
+let ADMIN = null;
+try { if (new URLSearchParams(location.search).get('all')) ADMIN = localStorage.getItem('fbcs-admin'); } catch {}
+const scope = ADMIN ? '?all=1' : '';
+const withToken = url => ADMIN ? url + (url.includes('?') ? '&' : '?') + 'all=1&token=' + encodeURIComponent(ADMIN) : url;
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers, ADMIN ? { 'x-admin-token': ADMIN } : {});
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${r.status}`);
+  return data;
+}
+function setMsg(sel, text, cls = '') { const el = $(sel); el.textContent = text; el.className = 'msgline ' + cls; }
+
+/* ---------- phiên Facebook của người dùng ---------- */
+async function refreshSession() {
+  try {
+    const s = await api('/api/session');
+    const b = $('#sessBadge');
+    if (s.account_id) { b.textContent = 'Đã đăng nhập · ' + s.account_id; b.className = 'badge ok'; }
+    else if (s.shared) { b.textContent = 'Dùng tài khoản chung'; b.className = 'badge'; }
+    else { b.textContent = 'Chế độ khách'; b.className = 'badge'; }
+    $('#ttlDays').textContent = s.ttl_days;
+    if (!s.account_id && !s.shared) $('#sessBox').open = true;
+  } catch {}
+}
+$('#saveSess').onclick = async () => {
+  const v = $('#cookieInput').value.trim();
+  if (!v) return setMsg('#sessMsg', 'Chưa dán cookie.', 'err-text');
+  $('#saveSess').disabled = true;
+  try {
+    const r = await api('/api/session', { method: 'POST', body: v });
+    setMsg('#sessMsg', 'Đã lưu (tài khoản ' + r.account_id + ').', 'ok-text');
+    $('#cookieInput').value = ''; refreshSession();
+  } catch (e) { setMsg('#sessMsg', e.message, 'err-text'); }
+  $('#saveSess').disabled = false;
+};
+$('#clearSess').onclick = async () => {
+  if (!confirm('Xoá cookie đã lưu?')) return;
+  await api('/api/session', { method: 'DELETE' }).catch(e => alert(e.message));
+  setMsg('#sessMsg', 'Đã xoá.', ''); refreshSession();
+};
+refreshSession();
+
+/* ---------- form ---------- */
+const lines = v => v.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#'));
+function saveDraft() {
+  try { localStorage.setItem('fbcs-urls', $('#urls').value); } catch {}
+  $('#urlCount').textContent = lines($('#urls').value).length + ' link';
+}
+try { $('#urls').value = localStorage.getItem('fbcs-urls') || ''; } catch {}
+saveDraft();
+$('#urls').addEventListener('input', saveDraft);
+
+$('#startBtn').addEventListener('click', async () => {
+  const urls = lines($('#urls').value);
+  if (!urls.length) return setMsg('#formMsg', 'Chưa có link nào.', 'err-text');
+  $('#startBtn').disabled = true;
+  try {
+    const r = await api('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' },
+                                       body: JSON.stringify({ urls }) });
+    setMsg('#formMsg', `Đã thêm ${r.created} bài vào hàng đợi.`, 'ok-text');
+    $('#urls').value = ''; saveDraft(); refresh();
+  } catch (e) { setMsg('#formMsg', e.message, 'err-text'); }
+  $('#startBtn').disabled = false;
+});
+
+/* ---------- jobs ---------- */
+function rowHtml(j) {
+  const [label, cls] = STATUS[j.status] || [j.status, ''];
+  const active = ACTIVE.includes(j.status);
+  const count = j.count || 0, total = j.total_hint;
+  const rate = j.elapsed > 1 ? (count - (j.start_count || 0)) / j.elapsed : 0;
+
+  const title = esc(j.title || j.url);
+  const link = /^https?:\/\//i.test(j.url) ? `<a href="${esc(j.url)}" target="_blank" rel="noopener">${title}</a>` : `<b>${title}</b>`;
+  const sub = j.title ? `<div class="sub">${esc(j.url)}</div>` : '';
+  const msg = j.message ? `<div class="msg ${j.status === 'error' ? 'err-text' : 'warn-text'}">${esc(j.message)}</div>` : '';
+  const log = active && j.log && j.log.length ? `<div class="log">${esc(j.log[j.log.length - 1])}</div>` : '';
+
+  const streams = (j.streams || []).map(s => `${ORDER[s.order] || s.order}: ${fmt(s.pages)} trang, +${fmt(s.new)}` +
+                                             (s.stop ? ` (${STOP[s.stop] || 'lỗi'})` : '')).join(' · ');
+  let phase = '';
+  if (j.status === 'running') phase = (j.top_done ? 'Đang lấy phản hồi' : streams) +
+                                      ` · ${fmt(j.reply_pending)} chuỗi phản hồi chờ`;
+  const st = j.stats;
+  let detail = '';
+  if (st && !active) {
+    const allEnded = (j.streams || []).length > 0 && j.streams.every(s => s.stop === 'end');
+    const gap = total && total > count ? total - count : 0;
+    let verdict;
+    if (!allEnded) {
+      verdict = '<span class="warn-text">Một số danh sách dừng sớm (lỗi/kẹt), chưa chạy hết — bấm Tiếp tục để lấy thêm.</span>';
+    } else if (!total) {
+      verdict = '<b>Đã lấy hết phần Facebook cho trả về.</b>';
+    } else if (gap <= 0) {
+      verdict = `<b>Đã lấy đủ số Facebook hiển thị (${fmt(count)}).</b>`;
+    } else {
+      const missReplies = st.replies_missing
+        ? `${fmt(st.replies_missing)} phản hồi bị Facebook đếm nhưng trả “hết”, phần còn lại là bình luận bị lọc/ẩn`
+        : 'bình luận/phản hồi bị Facebook lọc/ẩn';
+      verdict = `<b>Đã lấy ~${Math.round(count / total * 100)}% số Facebook hiển thị (${fmt(count)}/${fmt(total)}).</b> ` +
+                `Facebook không trả ${fmt(gap)} còn lại (${missReplies}) — đây là mức tối đa lấy được.`;
+    }
+    detail = `<div class="sub">Cấp 1: ${fmt(st.top_level)} · phản hồi: ${fmt(st.replies)}` +
+             `<br>${verdict}` + (streams ? `<br>${streams}` : '') + '</div>';
+  }
+
+  const pct = total ? Math.min(100, count / total * 100) : (j.status === 'done' ? 100 : 0);
+  const barCls = j.status === 'done' ? 'done' : (j.status === 'running' && !total ? 'indet' : '');
+  const eta = j.status === 'running' && total && rate > 0 && count < total ? `còn ~${fmtDur((total - count) / rate)}` : '';
+
+  const acts = [];
+  if (active) acts.push(`<button class="sm" data-act="stop" data-id="${j.id}">Dừng</button>`);
+  else if (j.status !== 'done' || j.message) acts.push(`<button class="sm" data-act="resume" data-id="${j.id}">Tiếp tục</button>`);
+  if (count) acts.push(`<a class="btn sm" href="${withToken(`/api/jobs/${j.id}/download?fmt=csv`)}">CSV</a>`,
+                       `<a class="btn sm ghost" href="${withToken(`/api/jobs/${j.id}/download?fmt=jsonl`)}">JSONL</a>`);
+  if (!active) acts.push(`<button class="sm ghost" data-act="delete" data-id="${j.id}" title="Xoá job và dữ liệu">✕</button>`);
+
+  return `<td class="post">${link}${sub}${msg}${detail}${log}</td>
+    <td><span class="badge ${cls}">${label}</span>${phase ? `<div class="sub">${phase}</div>` : ''}</td>
+    <td class="num"><b>${fmt(count)}</b>${total ? ` <span class="muted">/ ~${fmt(total)}</span>` : ''}
+      <div class="bar ${barCls}"><span style="width:${pct.toFixed(1)}%"></span></div></td>
+    <td class="num">${rate ? rate.toFixed(1) + '/s' : ''}${eta ? `<div class="sub">${eta}</div>` : ''}</td>
+    <td class="num">${fmtDur(j.elapsed)}</td>
+    <td class="actions">${acts.join('')}</td>`;
+}
+
+const rows = new Map();
+function renderJobs(list) {
+  const body = $('#jobsBody'), ids = new Set(list.map(j => j.id));
+  for (const [id, tr] of rows) if (!ids.has(id)) { tr.remove(); rows.delete(id); }
+  list.forEach((j, i) => {
+    let tr = rows.get(j.id);
+    if (!tr) { tr = document.createElement('tr'); rows.set(j.id, tr); }
+    const html = rowHtml(j);
+    if (tr._html !== html) { tr.innerHTML = html; tr._html = html; }
+    if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
+  });
+  $('#empty').hidden = list.length > 0;
+  const by = s => list.filter(j => j.status === s).length;
+  const total = list.reduce((a, j) => a + (j.count || 0), 0);
+  $('#summary').textContent = list.length
+    ? `${fmt(total)} bình luận · ${by('running') + by('resolving')} đang chạy · ${by('queued')} chờ · ${by('done')} xong` : '';
+}
+
+$('#jobsBody').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const { act, id } = b.dataset;
+  if (act === 'delete' && !confirm('Xoá bài này và dữ liệu đã cào?')) return;
+  b.disabled = true;
+  try {
+    if (act === 'delete') await api(`/api/jobs/${id}`, { method: 'DELETE' });
+    else await api(`/api/jobs/${id}/${act}`, { method: 'POST' });
+  } catch (err) { alert(err.message); }
+  refresh();
+});
+$('#stopAll').addEventListener('click', async () => {
+  if (!confirm('Dừng tất cả các bài đang chạy và đang chờ?')) return;
+  await api('/api/stop-all' + scope, { method: 'POST' }).catch(e => alert(e.message));
+  refresh();
+});
+$('#exportAll').href = withToken('/api/export-all');
+
+let timer;
+async function refresh() {
+  clearTimeout(timer);
+  try {
+    const d = await api('/api/jobs' + scope);
+    $('#adminBar').hidden = !d.admin;
+    renderJobs(d.jobs);
+    $('#conn').hidden = true;
+  } catch { $('#conn').hidden = false; }
+  timer = setTimeout(refresh, document.hidden ? 5000 : 1500);
+}
+
+/* ---------- tab nền tảng ---------- */
+const PLATFORM_EMOJI = { facebook: '📘', threads: '🧵', instagram: '📸', x: '✖️' };
+let activePlatform = 'facebook';
+try { activePlatform = localStorage.getItem('fbcs-platform') || 'facebook'; } catch {}
+
+function showPane(id) {
+  if (!document.getElementById('pane-' + id)) id = 'facebook';
+  activePlatform = id;
+  try { localStorage.setItem('fbcs-platform', id); } catch {}
+  document.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== 'pane-' + id);
+  $('#tabs').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.plat === id));
+}
+function renderTabs(platforms) {
+  $('#tabs').innerHTML = platforms.map(p =>
+    `<button data-plat="${p.id}">${esc(p.name)}${p.enabled ? '' : '<span class="soon">sắp có</span>'}</button>`).join('');
+  platforms.forEach(p => {
+    const pane = document.getElementById('pane-' + p.id);
+    if (pane && !p.enabled && !pane.innerHTML.trim()) {
+      pane.innerHTML = `<section class="card soon-card"><span class="emoji">${PLATFORM_EMOJI[p.id] || '🧩'}</span>` +
+        `<div class="big">${esc(p.name)} — sắp có</div>` +
+        `<p class="muted">Tính năng cào ${esc(p.name)} đang được phát triển. Hiện tại chỉ Facebook hoạt động.</p></section>`;
+    }
+  });
+  $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => showPane(b.dataset.plat));
+  showPane(activePlatform);
+}
+
+api('/api/status').then(s => {
+  renderTabs(s.platforms || [{ id: 'facebook', name: 'Facebook', enabled: true }]);
+  if (s.account_mode) $('#scopeHint').innerHTML = 'Hỗ trợ bài viết công khai và bài cần đăng nhập để xem. Lấy cả bình luận và phản hồi.';
+  $('#scopeHint').innerHTML += ` Tối đa ${s.max_links} bài mỗi lần.`;
+}).catch(() => { renderTabs([{ id: 'facebook', name: 'Facebook', enabled: true }]); });
+refresh();
+</script>
+</body>
+</html>

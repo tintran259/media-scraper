@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quản trị cào bình luận</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1c1e21; --muted: #65676b; --line: #e4e6eb;
+    --accent: #1b74e4; --accent-text: #fff; --ok: #1f8a4c; --err: #d1273c; --warn: #b26a00; --chip: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #18191a; --card: #242526; --text: #e4e6eb; --muted: #a8abaf; --line: #3a3b3c;
+            --accent: #2d88ff; --ok: #45bd62; --err: #f3425f; --warn: #f0a33a; --chip: #3a3b3c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px;
+           background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  header a { color: var(--muted); font-size: 13px; text-decoration: none; }
+  main { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); }
+  input, textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg); margin-top: 4px;
+                    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  textarea { font: 12px/1.5 ui-monospace, Consolas, monospace; min-height: 80px; resize: vertical; }
+  button, .btn { font: inherit; font-weight: 600; cursor: pointer; border-radius: 8px; padding: 7px 14px;
+           border: 1px solid var(--line); background: var(--chip); color: var(--text); text-decoration: none; display: inline-block; }
+  button:hover { filter: brightness(.96); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .danger { color: var(--err); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--chip); }
+  .pill.on { color: var(--ok); } .pill.off { color: var(--muted); }
+  code { font: 12px ui-monospace, Consolas, monospace; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  pre { font: 12px/1.5 ui-monospace, Consolas, monospace; background: var(--bg); border: 1px solid var(--line);
+        border-radius: 8px; padding: 10px; overflow-x: auto; margin: 10px 0 0; white-space: pre-wrap; }
+  p.note { margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Quản trị</h1>
+  <a href="/?all=1">Xem tất cả job</a>
+  <a href="/">Trang người dùng</a>
+</header>
+<main>
+  <section class="card" id="loginCard">
+    <h2>Đăng nhập admin</h2>
+    <label>Mật khẩu admin (in ra cửa sổ chạy server, hoặc file <code>data/admin_token.txt</code>)
+      <input type="password" id="token" autocomplete="current-password"></label>
+    <div class="row"><button class="primary" id="loginBtn">Đăng nhập</button><span id="loginMsg" class="muted"></span></div>
+  </section>
+
+  <div id="panel" hidden style="display:grid;gap:16px">
+    <section class="card">
+      <h2>Phiên Facebook</h2>
+      <div class="row" style="margin-top:0">
+        <span id="sessStatus" class="pill off">Chế độ khách</span>
+        <span id="sessMsg" class="muted"></span>
+      </div>
+      <p class="muted note">Chế độ khách chỉ lấy được bình luận công khai (khoảng 60–70%). Đăng nhập để lấy đầy đủ hơn.
+        Khi bấm “Đăng nhập Facebook”, một cửa sổ trình duyệt sẽ mở <b>trên máy đang chạy app</b> để bạn tự đăng nhập —
+        app không thấy mật khẩu, chỉ lưu phiên trên máy. (Chạy app trên máy của bạn thì mới thấy cửa sổ này; nếu app chạy trên
+        máy chủ khác, hãy chạy lệnh <code>python fb_browser.py login</code> trên máy đó.)</p>
+      <div class="row">
+        <button class="primary" id="fbLoginBtn">Đăng nhập Facebook</button>
+        <button id="fbLogoutBtn" class="danger">Đăng xuất / xoá phiên</button>
+      </div>
+      <details style="margin-top:12px">
+        <summary class="muted" style="cursor:pointer">App chạy trên server không màn hình? Tải lên file phiên</summary>
+        <p class="muted note">Trên máy <b>của bạn</b>, bấm đúp <code>dang-nhap-facebook.bat</code> để đăng nhập và tạo file
+          <code>data/fb_state.json</code>, rồi chọn file đó ở đây để nạp lên server.</p>
+        <div class="row" style="margin-top:8px">
+          <input type="file" id="sessFile" accept=".json">
+          <button id="uploadSess">Nạp phiên từ file</button>
+        </div>
+      </details>
+      <p class="muted note">Nên dùng <b>tài khoản phụ</b>: tài khoản dùng để cào có thể bị Facebook giới hạn hoặc khóa.</p>
+    </section>
+
+    <section class="card">
+      <h2>Cấu hình cào</h2>
+      <div class="grid">
+        <label>Số bài chạy cùng lúc<input type="number" id="parallel" min="1" max="20"></label>
+        <label>Luồng lấy phản hồi / bài<input type="number" id="concurrency" min="1" max="100"></label>
+        <label>Nghỉ giữa các trang (giây)<input type="number" id="delay" min="0" max="30" step="0.1"></label>
+        <label>Tối đa bài / người dùng<input type="number" id="max_links" min="1" max="500"></label>
+      </div>
+      <label style="margin-top:12px">Proxy (mỗi dòng một proxy, dạng <code>http://user:pass@host:port</code>)
+        <textarea id="proxies" spellcheck="false"></textarea></label>
+      <details style="margin-top:12px">
+        <summary class="muted" style="cursor:pointer">Dán cookie thủ công (cách thay thế đăng nhập)</summary>
+        <label style="margin-top:8px">Cookie tài khoản Facebook
+          <textarea id="fb_cookie" spellcheck="false" placeholder="c_user=...; xs=...; datr=...   (để trống = giữ nguyên)"></textarea></label>
+        <div class="row"><button id="clearCookie">Xoá cookie</button></div>
+      </details>
+      <div class="row"><button class="primary" id="saveBtn">Lưu cấu hình</button><span id="saveMsg" class="muted"></span></div>
+    </section>
+
+    <section class="card">
+      <h2>Kiểm tra hệ thống</h2>
+      <p class="muted" style="margin-top:0">Mở thử một bài viết giống như khi cào (không cào): xem trình duyệt ẩn có chạy không,
+        lấy được doc_id/token không, đang ở chế độ khách hay đã đăng nhập.</p>
+      <label>Link bài viết<input id="checkUrl" placeholder="https://www.facebook.com/.../posts/..."></label>
+      <div class="row"><button id="checkBtn">Kiểm tra</button><span id="checkMsg" class="muted"></span></div>
+      <pre id="checkOut" hidden></pre>
+    </section>
+  </div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const FIELDS = ['parallel', 'concurrency', 'delay', 'max_links'];
+let TOKEN = '';
+try { TOKEN = localStorage.getItem('fbcs-admin') || ''; } catch {}
+let sessTimer;
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ 'content-type': 'application/json', 'x-admin-token': TOKEN }, opts.headers);
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${r.status}`);
+  return data;
+}
+function fillSettings(s) {
+  FIELDS.forEach(f => $('#' + f).value = s[f]);
+  $('#proxies').value = (s.proxies || []).join('\n');
+  $('#fb_cookie').value = '';
+  $('#fb_cookie').placeholder = s.fb_cookie_set ? 'Đã có cookie. Dán cookie mới để thay, để trống để giữ nguyên.'
+                                                : 'c_user=...; xs=...; datr=...';
+}
+function renderSession(s) {
+  const badge = $('#sessStatus'), msg = $('#sessMsg'), btn = $('#fbLoginBtn');
+  const running = s.login && s.login.status === 'running';
+  btn.disabled = running;
+  if (s.account_id) {
+    badge.textContent = 'Đã đăng nhập · tài khoản ' + s.account_id; badge.className = 'pill on';
+  } else if (s.has_session) {
+    badge.textContent = 'Có phiên đăng nhập'; badge.className = 'pill on';
+  } else {
+    badge.textContent = 'Chế độ khách'; badge.className = 'pill off';
+  }
+  if (running) { msg.textContent = 'Đang chờ bạn đăng nhập ở cửa sổ trình duyệt trên máy chủ…'; msg.className = 'muted warn'; }
+  else if (s.login && s.login.status === 'error') { msg.textContent = 'Lần đăng nhập trước lỗi: ' + s.login.error; msg.className = 'muted err'; }
+  else if (s.login && s.login.status === 'done') { msg.textContent = 'Đăng nhập thành công.'; msg.className = 'muted ok'; }
+  else msg.textContent = '';
+  clearTimeout(sessTimer);
+  if (running) sessTimer = setTimeout(refreshSession, 2000);
+}
+async function refreshSession() { try { renderSession(await api('/api/admin/session')); } catch {} }
+
+async function login() {
+  try {
+    fillSettings(await api('/api/admin/settings'));
+    await refreshSession();
+    try { localStorage.setItem('fbcs-admin', TOKEN); } catch {}
+    $('#loginCard').hidden = true; $('#panel').hidden = false;
+  } catch (e) { $('#loginMsg').textContent = TOKEN ? e.message : ''; $('#loginCard').hidden = false; $('#panel').hidden = true; }
+}
+$('#loginBtn').onclick = () => { TOKEN = $('#token').value.trim(); login(); };
+$('#token').addEventListener('keydown', e => { if (e.key === 'Enter') $('#loginBtn').click(); });
+
+$('#fbLoginBtn').onclick = async () => {
+  $('#fbLoginBtn').disabled = true;
+  try { $('#sessMsg').textContent = (await api('/api/admin/login', { method: 'POST' })).message; $('#sessMsg').className = 'muted warn'; refreshSession(); }
+  catch (e) { $('#sessMsg').textContent = e.message; $('#sessMsg').className = 'muted err'; $('#fbLoginBtn').disabled = false; }
+};
+$('#fbLogoutBtn').onclick = async () => {
+  if (!confirm('Xoá phiên đăng nhập, quay về chế độ khách?')) return;
+  await api('/api/admin/logout', { method: 'POST' }).catch(e => alert(e.message));
+  refreshSession();
+};
+$('#uploadSess').onclick = async () => {
+  const f = $('#sessFile').files[0];
+  if (!f) { $('#sessMsg').textContent = 'Chưa chọn file.'; $('#sessMsg').className = 'muted err'; return; }
+  try {
+    const r = await api('/api/admin/session/upload', { method: 'POST', body: await f.text() });
+    $('#sessMsg').textContent = 'Đã nạp phiên (tài khoản ' + r.account_id + ').'; $('#sessMsg').className = 'muted ok';
+    refreshSession();
+  } catch (e) { $('#sessMsg').textContent = e.message; $('#sessMsg').className = 'muted err'; }
+};
+
+async function saveSettings(extra = {}) {
+  const body = Object.fromEntries(FIELDS.map(f => [f, +$('#' + f).value]));
+  body.proxies = $('#proxies').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if ($('#fb_cookie').value.trim()) body.fb_cookie = $('#fb_cookie').value.trim();
+  Object.assign(body, extra);
+  try { fillSettings(await api('/api/admin/settings', { method: 'POST', body: JSON.stringify(body) }));
+        $('#saveMsg').textContent = 'Đã lưu.'; $('#saveMsg').className = 'muted ok'; }
+  catch (e) { $('#saveMsg').textContent = e.message; $('#saveMsg').className = 'muted err'; }
+}
+$('#saveBtn').onclick = () => saveSettings();
+$('#clearCookie').onclick = () => confirm('Xoá cookie đã dán?') && saveSettings({ clear_cookie: true });
+
+$('#checkBtn').onclick = async () => {
+  const url = $('#checkUrl').value.trim();
+  if (!url) return;
+  $('#checkBtn').disabled = true; $('#checkMsg').textContent = 'Đang mở bài viết…'; $('#checkMsg').className = 'muted';
+  try {
+    const r = await api('/api/admin/check', { method: 'POST', body: JSON.stringify({ url }) });
+    $('#checkMsg').textContent = `OK trong ${r.elapsed}s (${r.browser}, chế độ ${r.mode === 'guest' ? 'khách' : 'đã đăng nhập'})`;
+    $('#checkMsg').className = 'muted ok';
+    $('#checkOut').textContent = JSON.stringify(r, null, 2); $('#checkOut').hidden = false;
+  } catch (e) { $('#checkMsg').textContent = e.message; $('#checkMsg').className = 'muted err'; $('#checkOut').hidden = true; }
+  $('#checkBtn').disabled = false;
+};
+login();
+</script>
+</body>
+</html>
