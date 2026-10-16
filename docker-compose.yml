@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?dat ADMIN_TOKEN trong file .env}
+      FB_SCRAPER_DATA: /data
+      PLAYWRIGHT_NO_SANDBOX: "1"
+    volumes:
+      - ./data:/data          # dữ liệu + cookie (đã mã hoá) nằm ở đây, giữ qua các lần restart
+    expose:
+      - "8765"                # chỉ mở trong mạng nội bộ của compose, Caddy mới ra ngoài
+    restart: always
+    # Trình duyệt ẩn khá tốn RAM — mở giới hạn nếu VPS nhỏ:
+    # mem_limit: 1500m
+
+  caddy:                      # reverse proxy + HTTPS tự động (Let's Encrypt)
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?dat DOMAIN trong file .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: always
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

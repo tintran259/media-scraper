@@ -93,22 +93,23 @@
 <nav id="tabs" class="tabs"></nav>
 
 <main>
-  <div id="pane-facebook" class="pane">
-  <section class="card">
+  <div id="pane-facebook" class="pane"></div>
+  <div id="pane-threads" class="pane" hidden></div>
+  <div id="pane-instagram" class="pane" hidden></div>
+  <div id="pane-x" class="pane" hidden></div>
+
+  <div id="work">
+  <section class="card" id="sessionCard">
     <div class="row between" style="margin:0 0 4px">
-      <h2 style="margin:0">Tài khoản Facebook của bạn</h2>
+      <h2 style="margin:0" id="sessTitle">Tài khoản của bạn</h2>
       <span id="sessBadge" class="badge">…</span>
     </div>
-    <p class="hint" id="sessHint">Dán cookie đăng nhập để lấy đầy đủ bình luận. Mỗi người dùng tài khoản riêng của mình.</p>
+    <p class="hint" id="sessHint">Dán cookie đăng nhập để lấy đầy đủ hơn. Mỗi người dùng tài khoản riêng của mình.</p>
     <details id="sessBox">
-      <summary>Thêm / đổi cookie đăng nhập Facebook</summary>
-      <ol>
-        <li>Đăng nhập Facebook bằng <b>tài khoản phụ</b> trên trình duyệt.</li>
-        <li>Cài tiện ích <b>Cookie-Editor</b>, mở ở tab <code>facebook.com</code>, bấm <b>Export</b> (dạng JSON).</li>
-        <li>Dán vào ô dưới rồi bấm Lưu. Hoặc dán chuỗi <code>c_user=...; xs=...</code> lấy từ DevTools.</li>
-      </ol>
+      <summary id="sessSummary">Thêm / đổi cookie đăng nhập</summary>
+      <ol id="sessSteps"></ol>
       <textarea id="cookieInput" spellcheck="false" style="min-height:90px"
-        placeholder="Dán cookie JSON hoặc chuỗi c_user=...; xs=..."></textarea>
+        placeholder="Dán cookie JSON hoặc chuỗi cookie"></textarea>
       <div class="row" style="margin-top:8px">
         <button id="saveSess" class="primary">Lưu cookie</button>
         <button id="clearSess">Xoá</button>
@@ -118,7 +119,6 @@
         và tự xoá sau <span id="ttlDays">30</span> ngày.</p>
     </details>
   </section>
-
   <section class="card">
     <h2>Dán link bài viết</h2>
     <textarea id="urls" spellcheck="false" placeholder="Mỗi dòng một link, ví dụ:
@@ -141,7 +141,8 @@ https://www.facebook.com/reel/789"></textarea>
       <div class="row">
         <span id="summary" class="summary"></span>
         <button id="stopAll" class="sm">Dừng tất cả</button>
-        <a class="btn sm primary" id="exportAll" href="/api/export-all">Tải CSV gộp</a>
+        <a class="btn sm primary" id="exportAllXlsx" href="/api/export-xlsx">Tải Excel gộp</a>
+        <a class="btn sm" id="exportAll" href="/api/export-all">CSV gộp</a>
       </div>
     </div>
     <div class="table-wrap">
@@ -153,10 +154,6 @@ https://www.facebook.com/reel/789"></textarea>
     <p id="empty">Chưa có bài nào. Dán link ở trên rồi bấm “Bắt đầu cào”.</p>
   </section>
   </div>
-
-  <div id="pane-threads" class="pane" hidden></div>
-  <div id="pane-instagram" class="pane" hidden></div>
-  <div id="pane-x" class="pane" hidden></div>
 </main>
 
 <script>
@@ -174,7 +171,7 @@ const STATUS = {
   done: ['Xong', 'ok'], error: ['Lỗi', 'err'], stopped: ['Đã dừng', 'warn'],
 };
 const ACTIVE = ['queued', 'resolving', 'running'];
-const ORDER = { all: 'Tất cả', newest: 'Mới nhất' };
+const ORDER = { all: 'Tất cả', newest: 'Mới nhất', replies: 'Reply' };
 const STOP = { end: 'hết', no_page_info: 'trang lỗi', cursor_stuck: 'kẹt cursor' };
 
 // admin view: /?all=1 with the token saved by /admin
@@ -192,16 +189,56 @@ async function api(path, opts = {}) {
 }
 function setMsg(sel, text, cls = '') { const el = $(sel); el.textContent = text; el.className = 'msgline ' + cls; }
 
-/* ---------- phiên Facebook của người dùng ---------- */
+/* ---------- phiên đăng nhập theo nền tảng ---------- */
+const SESSION_UI = {
+  facebook: {
+    title: 'Tài khoản Facebook của bạn',
+    summary: 'Thêm / đổi cookie đăng nhập Facebook',
+    steps: '<li>Đăng nhập Facebook bằng <b>tài khoản phụ</b>.</li>' +
+           '<li>Cài tiện ích <b>Cookie-Editor</b>, mở tab <code>facebook.com</code>, bấm <b>Export</b> (JSON).</li>' +
+           '<li>Dán vào ô dưới, bấm Lưu. Hoặc dán chuỗi <code>c_user=...; xs=...</code> từ DevTools.</li>',
+    placeholder: 'Dán cookie JSON, hoặc chuỗi c_user=...; xs=...',
+  },
+  threads: {
+    title: 'Tài khoản Threads/Instagram của bạn',
+    summary: 'Thêm / đổi cookie đăng nhập Threads',
+    steps: '<li>Đăng nhập <b>Threads</b> (bằng Instagram) với <b>tài khoản phụ</b>.</li>' +
+           '<li>Cài <b>Cookie-Editor</b>, mở tab <code>threads.com</code>, bấm <b>Export</b> (JSON).</li>' +
+           '<li>Dán vào ô dưới, bấm Lưu. Cần có cookie <code>sessionid</code>.</li>',
+    placeholder: 'Dán cookie JSON của threads.com, hoặc chuỗi sessionid=...; ds_user_id=...',
+  },
+  instagram: {
+    title: 'Tài khoản Instagram của bạn',
+    summary: 'Thêm / đổi cookie đăng nhập Instagram',
+    steps: '<li>Đăng nhập <b>Instagram</b> bằng <b>tài khoản phụ</b> (bắt buộc).</li>' +
+           '<li>Cài <b>Cookie-Editor</b>, mở tab <code>instagram.com</code>, bấm <b>Export</b> (JSON).</li>' +
+           '<li>Dán vào ô dưới, bấm Lưu. Cần có cookie <code>sessionid</code>.</li>',
+    placeholder: 'Dán cookie JSON của instagram.com, hoặc chuỗi sessionid=...; ds_user_id=...',
+  },
+};
+function configureSession(id) {
+  const ui = SESSION_UI[id];
+  $('#sessionCard').hidden = !ui;
+  if (!ui) return;
+  $('#sessTitle').textContent = ui.title;
+  $('#sessSummary').textContent = ui.summary;
+  $('#sessSteps').innerHTML = ui.steps;
+  $('#cookieInput').placeholder = ui.placeholder;
+  $('#cookieInput').value = '';
+  setMsg('#sessMsg', '');
+  refreshSession();
+}
 async function refreshSession() {
+  const id = activePlatform;
+  if (!SESSION_UI[id]) return;
   try {
-    const s = await api('/api/session');
+    const s = await api('/api/session?platform=' + id);
+    if (id !== activePlatform) return;   // tab changed while loading
     const b = $('#sessBadge');
     if (s.account_id) { b.textContent = 'Đã đăng nhập · ' + s.account_id; b.className = 'badge ok'; }
     else if (s.shared) { b.textContent = 'Dùng tài khoản chung'; b.className = 'badge'; }
     else { b.textContent = 'Chế độ khách'; b.className = 'badge'; }
     $('#ttlDays').textContent = s.ttl_days;
-    if (!s.account_id && !s.shared) $('#sessBox').open = true;
   } catch {}
 }
 $('#saveSess').onclick = async () => {
@@ -209,7 +246,7 @@ $('#saveSess').onclick = async () => {
   if (!v) return setMsg('#sessMsg', 'Chưa dán cookie.', 'err-text');
   $('#saveSess').disabled = true;
   try {
-    const r = await api('/api/session', { method: 'POST', body: v });
+    const r = await api('/api/session?platform=' + activePlatform, { method: 'POST', body: v });
     setMsg('#sessMsg', 'Đã lưu (tài khoản ' + r.account_id + ').', 'ok-text');
     $('#cookieInput').value = ''; refreshSession();
   } catch (e) { setMsg('#sessMsg', e.message, 'err-text'); }
@@ -217,10 +254,9 @@ $('#saveSess').onclick = async () => {
 };
 $('#clearSess').onclick = async () => {
   if (!confirm('Xoá cookie đã lưu?')) return;
-  await api('/api/session', { method: 'DELETE' }).catch(e => alert(e.message));
+  await api('/api/session?platform=' + activePlatform, { method: 'DELETE' }).catch(e => alert(e.message));
   setMsg('#sessMsg', 'Đã xoá.', ''); refreshSession();
 };
-refreshSession();
 
 /* ---------- form ---------- */
 const lines = v => v.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#'));
@@ -272,15 +308,15 @@ function rowHtml(j) {
     if (!allEnded) {
       verdict = '<span class="warn-text">Một số danh sách dừng sớm (lỗi/kẹt), chưa chạy hết — bấm Tiếp tục để lấy thêm.</span>';
     } else if (!total) {
-      verdict = '<b>Đã lấy hết phần Facebook cho trả về.</b>';
+      verdict = '<b>Đã lấy hết phần nền tảng cho trả về.</b>';
     } else if (gap <= 0) {
-      verdict = `<b>Đã lấy đủ số Facebook hiển thị (${fmt(count)}).</b>`;
+      verdict = `<b>Đã lấy đủ số hiển thị (${fmt(count)}).</b>`;
     } else {
       const missReplies = st.replies_missing
-        ? `${fmt(st.replies_missing)} phản hồi bị Facebook đếm nhưng trả “hết”, phần còn lại là bình luận bị lọc/ẩn`
-        : 'bình luận/phản hồi bị Facebook lọc/ẩn';
-      verdict = `<b>Đã lấy ~${Math.round(count / total * 100)}% số Facebook hiển thị (${fmt(count)}/${fmt(total)}).</b> ` +
-                `Facebook không trả ${fmt(gap)} còn lại (${missReplies}) — đây là mức tối đa lấy được.`;
+        ? `${fmt(st.replies_missing)} phản hồi bị đếm nhưng trả “hết”, phần còn lại là bình luận bị lọc/ẩn`
+        : 'bình luận/phản hồi bị nền tảng lọc/ẩn';
+      verdict = `<b>Đã lấy ~${Math.round(count / total * 100)}% số hiển thị (${fmt(count)}/${fmt(total)}).</b> ` +
+                `Nền tảng không trả ${fmt(gap)} còn lại (${missReplies}) — đây là mức tối đa lấy được.`;
     }
     detail = `<div class="sub">Cấp 1: ${fmt(st.top_level)} · phản hồi: ${fmt(st.replies)}` +
              `<br>${verdict}` + (streams ? `<br>${streams}` : '') + '</div>';
@@ -293,7 +329,8 @@ function rowHtml(j) {
   const acts = [];
   if (active) acts.push(`<button class="sm" data-act="stop" data-id="${j.id}">Dừng</button>`);
   else if (j.status !== 'done' || j.message) acts.push(`<button class="sm" data-act="resume" data-id="${j.id}">Tiếp tục</button>`);
-  if (count) acts.push(`<a class="btn sm" href="${withToken(`/api/jobs/${j.id}/download?fmt=csv`)}">CSV</a>`,
+  if (count) acts.push(`<a class="btn sm" href="${withToken(`/api/jobs/${j.id}/download?fmt=xlsx`)}">Excel</a>`,
+                       `<a class="btn sm ghost" href="${withToken(`/api/jobs/${j.id}/download?fmt=csv`)}">CSV</a>`,
                        `<a class="btn sm ghost" href="${withToken(`/api/jobs/${j.id}/download?fmt=jsonl`)}">JSONL</a>`);
   if (!active) acts.push(`<button class="sm ghost" data-act="delete" data-id="${j.id}" title="Xoá job và dữ liệu">✕</button>`);
 
@@ -307,7 +344,10 @@ function rowHtml(j) {
 }
 
 const rows = new Map();
-function renderJobs(list) {
+let lastJobs = [];
+function renderJobs(list) { lastJobs = list; renderJobsFiltered(); }
+function renderJobsFiltered() {
+  const list = lastJobs.filter(j => (j.platform || 'facebook') === activePlatform);
   const body = $('#jobsBody'), ids = new Set(list.map(j => j.id));
   for (const [id, tr] of rows) if (!ids.has(id)) { tr.remove(); rows.delete(id); }
   list.forEach((j, i) => {
@@ -357,6 +397,18 @@ async function refresh() {
 
 /* ---------- tab nền tảng ---------- */
 const PLATFORM_EMOJI = { facebook: '📘', threads: '🧵', instagram: '📸', x: '✖️' };
+const PLATFORM_ENABLED = {};
+let MAX_LINKS = 0;
+const PLATFORM_PLACEHOLDER = {
+  facebook: 'https://www.facebook.com/tenpage/posts/pfbid0abc...\nhttps://www.facebook.com/groups/123/posts/456/',
+  threads: 'https://www.threads.com/@user/post/ABC123',
+  instagram: 'https://www.instagram.com/p/ABC123/\nhttps://www.instagram.com/reel/XYZ/',
+};
+const PLATFORM_HINT = {
+  facebook: 'Hỗ trợ bài viết <b>công khai</b>: trang, nhóm công khai, video, reel. Lấy cả bình luận và phản hồi.',
+  threads: 'Dán link bài Threads (threads.com/@user/post/...). Hiện lấy trả lời công khai ở chế độ khách.',
+  instagram: 'Dán link bài/reel Instagram. <b>Bắt buộc đăng nhập</b> (thêm cookie Instagram bên trên). Hiện lấy bình luận cấp 1.',
+};
 let activePlatform = 'facebook';
 try { activePlatform = localStorage.getItem('fbcs-platform') || 'facebook'; } catch {}
 
@@ -366,6 +418,16 @@ function showPane(id) {
   try { localStorage.setItem('fbcs-platform', id); } catch {}
   document.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== 'pane-' + id);
   $('#tabs').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.plat === id));
+  const enabled = PLATFORM_ENABLED[id] !== false;
+  $('#work').hidden = !enabled;
+  if (enabled) {
+    $('#urls').placeholder = 'Mỗi dòng một link, ví dụ:\n' + (PLATFORM_PLACEHOLDER[id] || '');
+    $('#scopeHint').innerHTML = (PLATFORM_HINT[id] || '') + (MAX_LINKS ? ` Tối đa ${MAX_LINKS} bài mỗi lần.` : '');
+    $('#exportAll').href = withToken('/api/export-all?platform=' + id);
+    $('#exportAllXlsx').href = withToken('/api/export-xlsx?platform=' + id);
+    configureSession(id);
+  }
+  renderJobsFiltered();
 }
 function renderTabs(platforms) {
   $('#tabs').innerHTML = platforms.map(p =>
@@ -383,9 +445,10 @@ function renderTabs(platforms) {
 }
 
 api('/api/status').then(s => {
+  MAX_LINKS = s.max_links || 0;
+  (s.platforms || []).forEach(p => { PLATFORM_ENABLED[p.id] = p.enabled; });
+  if (s.account_mode) PLATFORM_HINT.facebook = 'Hỗ trợ bài viết công khai và bài cần đăng nhập để xem. Lấy cả bình luận và phản hồi.';
   renderTabs(s.platforms || [{ id: 'facebook', name: 'Facebook', enabled: true }]);
-  if (s.account_mode) $('#scopeHint').innerHTML = 'Hỗ trợ bài viết công khai và bài cần đăng nhập để xem. Lấy cả bình luận và phản hồi.';
-  $('#scopeHint').innerHTML += ` Tối đa ${s.max_links} bài mỗi lần.`;
 }).catch(() => { renderTabs([{ id: 'facebook', name: 'Facebook', enabled: true }]); });
 refresh();
 </script>

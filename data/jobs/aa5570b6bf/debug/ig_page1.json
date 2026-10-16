@@ -1,0 +1,39 @@
+{
+ "top_level_keys": [
+  "ai_topic_filters",
+  "can_view_more_preview_comments",
+  "caption",
+  "caption_is_edited",
+  "comment_count",
+  "comment_cover_pos",
+  "comment_filter_param",
+  "comment_likes_enabled",
+  "comments",
+  "fb_comments",
+  "filter_options",
+  "foundation_improvements_enabled",
+  "geoblocked_comment_notices",
+  "has_more_comments",
+  "has_more_headload_comments",
+  "has_more_headload_fb_comments",
+  "initiate_at_top",
+  "insert_new_comment_to_top",
+  "is_ranked",
+  "liked_by_media_owner_badge_enabled",
+  "media_header_display",
+  "next_min_id",
+  "quick_response_emojis",
+  "scroll_behavior",
+  "should_render_upsell",
+  "sort_options",
+  "status",
+  "threading_enabled"
+ ],
+ "num_comments": 15,
+ "pagination": {
+  "has_more_comments": false,
+  "has_more_headload_comments": true,
+  "next_min_id": "{\"cached_comments_cursor\":\"18109914641230291\",\"bifilter_token\":\"GgYYeQBOlKmVj50_AClF1nhJ5j8AloHOoVZfQADPIG4ZfphBABnkfr_6dUAAp_I6Y9xNQAB-5KxQ6UtAAF9pyh73iD8Azz-wjHX-PwDlzKyJIBFAAPGFq-Z3XUAAJ4vnalpTQABjNOvyeTFAANJO21vdWEAALf3ixKm_PwAA\"}",
+  "comment_count": 4893
+ }
+}

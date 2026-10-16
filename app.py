@@ -29,7 +29,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
 import fb_browser
+import ig
 import scraper as core
+import threads
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("FB_SCRAPER_DATA", os.path.join(BASE_DIR, "data"))
@@ -48,8 +50,8 @@ PERSIST_KEYS = ("id", "owner", "platform", "url", "status", "message", "created_
 # scraper backend to turn it on. The UI builds its tabs from this list.
 PLATFORMS = [
     {"id": "facebook", "name": "Facebook", "hosts": ["facebook.com", "fb.com", "fb.watch", "fb.me"], "enabled": True},
-    {"id": "threads", "name": "Threads", "hosts": ["threads.net", "threads.com"], "enabled": False},
-    {"id": "instagram", "name": "Instagram", "hosts": ["instagram.com", "instagr.am"], "enabled": False},
+    {"id": "threads", "name": "Threads", "hosts": ["threads.net", "threads.com"], "enabled": True},
+    {"id": "instagram", "name": "Instagram", "hosts": ["instagram.com", "instagr.am"], "enabled": True},
     {"id": "x", "name": "X (Twitter)", "hosts": ["x.com", "twitter.com"], "enabled": False},
 ]
 PLATFORM_BY_ID = {p["id"]: p for p in PLATFORMS}
@@ -71,6 +73,8 @@ state = {"settings": dict(DEFAULT_SETTINGS), "admin_token": None, "closing": Fal
 jobs = {}     # id -> job dict, in submission order
 runtime = {}  # id -> {"task": asyncio.Task, "scraper": core.Scraper | None}
 pool = fb_browser.BrowserPool(state_path=fb_browser.STATE_PATH)
+threads_pool = threads.ThreadsPool()
+ig_pool = ig.IgPool()
 
 
 # ----------------------------------------------------------------- persistence
@@ -142,34 +146,43 @@ def _cipher():
     return Fernet(key)
 
 
-def user_session_path(uid):
+def user_session_path(uid, platform):
+    return os.path.join(SESSIONS_DIR, f"{uid}.{platform}.json")
+
+
+def _legacy_fb_path(uid):  # Facebook sessions saved before per-platform storage
     return os.path.join(SESSIONS_DIR, f"{uid}.json")
 
 
-def save_user_session(uid, account_id, cookie):
+def save_user_session(uid, platform, account_id, cookie):
     os.makedirs(SESSIONS_DIR, exist_ok=True)
-    write_json(user_session_path(uid), {"account_id": account_id, "added_at": time.time(),
-                                        "cookie_enc": _cipher().encrypt(cookie.encode()).decode()})
+    write_json(user_session_path(uid, platform), {"account_id": account_id, "added_at": time.time(),
+                                                  "cookie_enc": _cipher().encrypt(cookie.encode()).decode()})
 
 
-def clear_user_session(uid):
-    try:
-        os.remove(user_session_path(uid))
-    except FileNotFoundError:
-        pass
+def clear_user_session(uid, platform):
+    for path in (user_session_path(uid, platform),
+                 _legacy_fb_path(uid) if platform == "facebook" else None):
+        try:
+            os.remove(path) if path else None
+        except FileNotFoundError:
+            pass
 
 
-def load_user_session(uid):
-    """Decrypt a user's stored session, or None; also drops it once it is past the TTL."""
+def load_user_session(uid, platform):
+    """Decrypt a user's stored session for one platform, or None; drops it once past the TTL."""
     if not uid:
         return None
+    path = user_session_path(uid, platform)
+    if not os.path.exists(path) and platform == "facebook" and os.path.exists(_legacy_fb_path(uid)):
+        path = _legacy_fb_path(uid)
     try:
-        with open(user_session_path(uid), encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None
     if time.time() - data.get("added_at", 0) > SESSION_TTL_DAYS * 86400:
-        clear_user_session(uid)
+        clear_user_session(uid, platform)
         return None
     try:
         data["cookie"] = _cipher().decrypt(data["cookie_enc"].encode()).decode()
@@ -190,6 +203,8 @@ async def lifespan(_app):
     await asyncio.gather(*tasks, return_exceptions=True)
     save_jobs()
     await pool.close()
+    await threads_pool.close()
+    await ig_pool.close()
 
 
 app = FastAPI(title="FB Comment Scraper", lifespan=lifespan)
@@ -211,10 +226,36 @@ def pump():
             active += 1
 
 
+async def _prepare(j, plat, st, proxies):
+    """Open the post and build its scraper, per platform. Returns (info, scraper)."""
+    jid = j["id"]
+    p = fb_browser.pick_proxy(proxies)
+    cookie = (load_user_session(j.get("owner"), plat) or {}).get("cookie")  # the job owner's session for this platform
+    if plat == "facebook":
+        cookie = cookie or st["fb_cookie"] or None
+        info = await pool.open_post(j["url"], feedback_id=j.get("feedback_id"), cookie=cookie, proxy=p)
+        s = core.Scraper(info["templates"], job_dir(jid), feedback_id=info["feedback_id"],
+                         concurrency=st["concurrency"], delay=st["delay"], proxies=proxies,
+                         log=j["log"].append, log_progress=False, debug_dir=os.path.join(job_dir(jid), "debug"))
+    elif plat == "threads":  # logged in via an Instagram/Threads cookie if the user added one, else guest
+        session = await threads_pool.new_session(j["url"], cookie=cookie, proxy=p)
+        info = session.info
+        s = threads.ThreadsScraper(session, job_dir(jid), delay=max(st["delay"], 0.6),
+                                   log=j["log"].append, log_progress=False)
+    else:  # instagram — requires an Instagram login cookie
+        session = await ig_pool.new_session(j["url"], cookie=cookie, proxy=p)
+        info = session.info
+        # IG: ~0.35s/request by default (faster); admin can set a bigger "delay" if rate-limited, or smaller to risk it
+        s = ig.IgScraper(session, job_dir(jid), delay=(st["delay"] or 0.35),
+                         log=j["log"].append, log_progress=False, debug_dir=os.path.join(job_dir(jid), "debug"))
+    return info, s
+
+
 async def run_job(j):
     jid, s = j["id"], None
-    if j.get("platform", "facebook") != "facebook":  # only Facebook has a scraper backend yet
-        name = PLATFORM_BY_ID.get(j.get("platform"), {}).get("name", "Nền tảng này")
+    plat = j.get("platform", "facebook")
+    if plat not in ("facebook", "threads", "instagram"):
+        name = PLATFORM_BY_ID.get(plat, {}).get("name", "Nền tảng này")
         j.update(status="error", message=f"{name} đang phát triển, chưa cào được.", finished_at=time.time())
         runtime.pop(jid, None)
         save_jobs()
@@ -222,19 +263,11 @@ async def run_job(j):
         return
     st = dict(state["settings"])
     proxies = st["proxies"] or None
-    sess = load_user_session(j.get("owner"))
-    cookie = (sess or {}).get("cookie") or st["fb_cookie"] or None  # the job owner's own session wins
     try:
-        # a resumed job already knows its feedback id; opening the post again gives a fresh session
-        info = await pool.open_post(j["url"], feedback_id=j.get("feedback_id"), cookie=cookie,
-                                    proxy=fb_browser.pick_proxy(proxies))
+        info, s = await _prepare(j, plat, st, proxies)
         for k in ("feedback_id", "post_id", "title", "total_hint", "mode"):
             if info.get(k) is not None:
                 j[k] = info[k]
-
-        s = core.Scraper(info["templates"], job_dir(jid), feedback_id=j["feedback_id"], concurrency=st["concurrency"],
-                         delay=st["delay"], proxies=proxies, log=j["log"].append, log_progress=False,
-                         debug_dir=os.path.join(job_dir(jid), "debug"))
         runtime[jid]["scraper"] = s
         j.update(status="running", started_at=time.time(), start_count=len(s.seen), message=None)
         save_jobs()
@@ -243,19 +276,19 @@ async def run_job(j):
         j["status"] = "done"
         if not s.seen:
             if j.get("total_hint") == 0:
-                j["message"] = "Bài viết không có bình luận."
+                j["message"] = "Bài viết không có bình luận/trả lời."
             else:
-                j.update(status="error", message="Không lấy được comment nào. Bài có thể bị giới hạn người xem "
-                                                 "hoặc Facebook đang chặn; thử lại sau hoặc thêm proxy.")
-        elif s.reply_failed:
+                j.update(status="error", message="Không lấy được gì. Bài có thể bị giới hạn người xem hoặc "
+                                                 "nền tảng đang chặn; thử lại sau, thêm proxy hoặc đăng nhập.")
+        elif getattr(s, "reply_failed", 0):
             j["message"] = f"{s.reply_failed} chuỗi reply bị lỗi. Bấm Tiếp tục để thử lại phần còn thiếu."
     except asyncio.CancelledError:
         j.update(status="stopped", message="Đã dừng. Bấm Tiếp tục để chạy tiếp từ chỗ cũ.")
     except Exception as e:
-        j.update(status="error", message=f"{e!s:.400}")
+        j.update(status="error", message=cookie_error_message(plat, str(e)))
     finally:
         if s is not None:
-            j.update(count=len(s.seen), streams=streams_view(s), meta=s.meta)
+            j.update(count=len(s.seen), streams=streams_view(s), meta=getattr(s, "meta", {}) or {})
             try:
                 j["stats"] = core.completeness(job_dir(jid))
             except OSError:
@@ -266,9 +299,28 @@ async def run_job(j):
         pump()
 
 
+COOKIE_ERR_HINTS = ("đăng nhập", "login", "checkpoint", "cookie", "session hết hạn", "sessionid",
+                    "trang đăng nhập", "cookie chưa nhận")
+
+
+def cookie_error_message(platform, err):
+    """If a job failed because the login cookie is bad, tell the user clearly to update it."""
+    err = err[:400]
+    if any(h in err.lower() for h in COOKIE_ERR_HINTS) and platform in fb_browser.PLATFORM_AUTH:
+        name = PLATFORM_BY_ID.get(platform, {}).get("name", platform)
+        return (f"⚠️ Cookie {name} có vấn đề (hết hạn hoặc sai). Vào tab {name} → cập nhật cookie mới "
+                f"(đăng nhập lại rồi export), sau đó chạy lại. Chi tiết: {err}")
+    return err
+
+
 def streams_view(s):
-    return [{"order": core.INTENT_NAMES.get(x["intent"], x["intent"]), "pages": x["pages"], "new": x["new"],
-             "stop": x["stop"], "last_size": x["last_size"]} for x in s.streams.values()]
+    streams = getattr(s, "streams", None)
+    if isinstance(streams, dict) and streams:  # Facebook: one stream per sort order
+        return [{"order": core.INTENT_NAMES.get(x["intent"], x["intent"]), "pages": x["pages"], "new": x["new"],
+                 "stop": x["stop"], "last_size": x["last_size"]} for x in streams.values()]
+    # Threads / simple scrapers: a single reply stream
+    return [{"order": "replies", "pages": getattr(s, "pages", 0), "new": len(getattr(s, "seen", ())),
+             "stop": "end" if getattr(s, "done", False) else None, "last_size": None}]
 
 
 # ----------------------------------------------------------- users and admin
@@ -343,32 +395,42 @@ async def status():
             "platforms": [{"id": p["id"], "name": p["name"], "enabled": p["enabled"]} for p in PLATFORMS]}
 
 
+def _login_platform(platform):
+    if platform not in fb_browser.PLATFORM_AUTH or not PLATFORM_BY_ID.get(platform, {}).get("enabled"):
+        raise HTTPException(400, "Nền tảng không hỗ trợ đăng nhập.")
+    return platform
+
+
 @app.get("/api/session")
-async def my_session(uid: str = Depends(owner_id)):
-    s = load_user_session(uid)
+async def my_session(platform: str = "facebook", uid: str = Depends(owner_id)):
+    _login_platform(platform)
+    s = load_user_session(uid, platform)
+    shared = (pool.has_session or bool(state["settings"]["fb_cookie"])) if platform == "facebook" else False
     return {"account_id": (s or {}).get("account_id"), "has_session": bool(s), "ttl_days": SESSION_TTL_DAYS,
-            "shared": pool.has_session or bool(state["settings"]["fb_cookie"])}
+            "platform": platform, "shared": shared}
 
 
 @app.post("/api/session")
-async def set_my_session(request: Request, uid: str = Depends(owner_id)):
+async def set_my_session(request: Request, platform: str = "facebook", uid: str = Depends(owner_id)):
+    _login_platform(platform)
     raw = (await request.body()).decode("utf-8", "replace")
     try:
-        account, cookie = fb_browser.normalize_user_session(raw)
+        account, cookie = fb_browser.normalize_user_session(raw, platform)
     except ValueError as e:
         raise HTTPException(400, str(e)[:300])
     except (json.JSONDecodeError, TypeError, KeyError):
         raise HTTPException(400, "Nội dung không hợp lệ: cần chuỗi cookie hoặc JSON export.")
     try:
-        save_user_session(uid, account, cookie)
+        save_user_session(uid, platform, account, cookie)
     except ImportError:
         raise HTTPException(500, "Thiếu thư viện mã hoá. Chạy: python -m pip install cryptography")
     return {"account_id": account}
 
 
 @app.delete("/api/session")
-async def delete_my_session(uid: str = Depends(owner_id)):
-    clear_user_session(uid)
+async def delete_my_session(platform: str = "facebook", uid: str = Depends(owner_id)):
+    _login_platform(platform)
+    clear_user_session(uid, platform)
     return {"ok": True}
 
 
@@ -463,9 +525,107 @@ async def download(jid: str, request: Request, fmt: str = "csv", uid: str = Depe
     name = f"comments_{j.get('post_id') or jid}"
     if fmt == "jsonl":
         return FileResponse(src, filename=name + ".jsonl", media_type="application/x-ndjson")
+    if fmt == "xlsx":
+        dst = os.path.join(d, "comments.xlsx")
+        if not await asyncio.to_thread(build_xlsx, [(jid, j.get("title"))], dst):
+            raise HTTPException(404, "Chưa có dữ liệu.")
+        return FileResponse(dst, filename=_safe_filename(j.get("title") or name) + ".xlsx", media_type=XLSX_MEDIA)
     if not await asyncio.to_thread(core.export_csv, d):
         raise HTTPException(404, "Chưa có dữ liệu.")
     return FileResponse(os.path.join(d, "comments.csv"), filename=name + ".csv", media_type="text/csv")
+
+
+# ----------------------------------------------------------------- Excel export
+
+XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _fmt_time(iso):
+    """ISO (UTC) -> 'dd/mm/yyyy HH:MM' in Vietnam time (UTC+7)."""
+    if not iso:
+        return ""
+    try:
+        from datetime import datetime, timezone, timedelta
+        return datetime.fromisoformat(iso).astimezone(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+    except (ValueError, TypeError):
+        return str(iso)
+
+
+def _safe_filename(name, fallback="comments"):
+    return re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(name or "")).strip()[:100] or fallback
+
+
+def _sheet_name(title, used, fallback):
+    name = re.sub(r'[\\/?*\[\]:]+', " ", str(title or "")).strip()[:31] or fallback[:31]
+    base, i = name, 2
+    while name.lower() in used:
+        suffix = f" ({i})"
+        name = base[:31 - len(suffix)] + suffix
+        i += 1
+    used.add(name.lower())
+    return name
+
+
+def _threaded(rows):
+    """(depth, reply_label, author, text, time) in threaded order: each comment then its numbered replies."""
+    from collections import defaultdict
+    children = defaultdict(list)
+    for r in rows:
+        if r.get("parent_id"):
+            children[r["parent_id"]].append(r)
+    out, seen = [], set()
+
+    def walk(r, depth, label):
+        rid = r.get("id")
+        if rid in seen:
+            return
+        seen.add(rid)
+        out.append((depth, label, r.get("author_name") or "", r.get("text") or "", r.get("created_time")))
+        for i, child in enumerate(children.get(rid, []), 1):
+            walk(child, depth + 1, f"Reply {i}")
+
+    for r in rows:
+        if not r.get("parent_id"):
+            walk(r, 0, None)
+    for r in rows:                       # replies whose parent is missing -> show on their own line
+        if r.get("id") not in seen:
+            walk(r, 0, None)
+    return out
+
+
+def _write_sheet(ws, rows):
+    from openpyxl.styles import Alignment, Font
+    ws.append(["Bình luận", "Thời gian"])
+    ws["A1"].font = ws["B1"].font = Font(bold=True)
+    for depth, label, author, text, t in _threaded(rows):
+        head = f"{label} — " if label else ""
+        body = f"{author}: {text}" if author else text
+        ws.append([head + body, _fmt_time(t)])
+        cell = ws.cell(ws.max_row, 1)
+        cell.alignment = Alignment(indent=min(depth, 8), wrap_text=True, vertical="top")
+        if depth == 0:
+            cell.font = Font(bold=True)
+    ws.column_dimensions["A"].width = 95
+    ws.column_dimensions["B"].width = 18
+    ws.freeze_panes = "A2"
+
+
+def build_xlsx(entries, dst):
+    """entries: [(job_id, title)] -> an .xlsx with one sheet per post, each sheet named after its title."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.remove(wb.active)
+    used, n = set(), 0
+    for jid, title in entries:
+        rows = list(core.iter_jsonl(os.path.join(job_dir(jid), "comments.jsonl")))
+        if not rows:
+            continue
+        _write_sheet(wb.create_sheet(_sheet_name(title, used, "post " + jid)), rows)
+        n += 1
+    if not n:
+        return 0
+    wb.save(dst)
+    return n
 
 
 def build_export(entries, dst):
@@ -486,14 +646,27 @@ def build_export(entries, dst):
 
 
 @app.get("/api/export-all")
-async def export_all(request: Request, all: int = 0, uid: str = Depends(owner_id)):
+async def export_all(request: Request, all: int = 0, platform: str = "", uid: str = Depends(owner_id)):
     admin = bool(all) and is_admin(request)
-    entries = [(j["id"], j["url"], j.get("post_id")) for j in jobs.values() if admin or j.get("owner") == uid]
+    entries = [(j["id"], j["url"], j.get("post_id")) for j in jobs.values()
+               if (admin or j.get("owner") == uid) and (not platform or j.get("platform", "facebook") == platform)]
     os.makedirs(os.path.join(DATA_DIR, "exports"), exist_ok=True)
     dst = os.path.join(DATA_DIR, "exports", f"{'all' if admin else uid}.csv")
     if not await asyncio.to_thread(build_export, entries, dst):
         raise HTTPException(404, "Chưa có dữ liệu.")
     return FileResponse(dst, filename=f"comments_{time.strftime('%Y%m%d_%H%M')}.csv", media_type="text/csv")
+
+
+@app.get("/api/export-xlsx")
+async def export_xlsx(request: Request, all: int = 0, platform: str = "", uid: str = Depends(owner_id)):
+    admin = bool(all) and is_admin(request)
+    entries = [(j["id"], j.get("title") or j.get("url")) for j in jobs.values()
+               if (admin or j.get("owner") == uid) and (not platform or j.get("platform", "facebook") == platform)]
+    os.makedirs(os.path.join(DATA_DIR, "exports"), exist_ok=True)
+    dst = os.path.join(DATA_DIR, "exports", f"{'all' if admin else uid}.xlsx")
+    if not await asyncio.to_thread(build_xlsx, entries, dst):
+        raise HTTPException(404, "Chưa có dữ liệu.")
+    return FileResponse(dst, filename=f"comments_{time.strftime('%Y%m%d_%H%M')}.xlsx", media_type=XLSX_MEDIA)
 
 
 # ----------------------------------------------------------------- admin API

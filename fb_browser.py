@@ -93,16 +93,29 @@ def chrome_ua(version):
             f"Chrome/{version.split('.')[0]}.0.0.0 Safari/537.36")
 
 
-def parse_cookie_string(raw):
-    """'c_user=1; xs=abc' or a Cookie-Editor JSON export -> Playwright cookies."""
+def parse_cookie_string(raw, default_domain=".facebook.com"):
+    """'c_user=1; xs=abc', a Cookie-Editor JSON export, or a storage_state JSON -> Playwright cookies.
+
+    A JSON export keeps each cookie's own domain; a bare string gets `default_domain` (per platform).
+    """
     raw = (raw or "").strip()
     if not raw:
         return []
-    if raw.startswith("["):
-        pairs = [(c["name"], c["value"]) for c in json.loads(raw)]
+    out = []
+    if raw[0] in "[{":
+        data = json.loads(raw)
+        items = data.get("cookies", []) if isinstance(data, dict) else data
+        for c in items:
+            if isinstance(c, dict) and c.get("name"):
+                out.append({"name": c["name"], "value": c.get("value", ""),
+                            "domain": c.get("domain") or default_domain, "path": c.get("path") or "/",
+                            "secure": True})
     else:
-        pairs = [tuple(p.strip().split("=", 1)) for p in raw.split(";") if "=" in p]
-    return [{"name": k, "value": v, "domain": ".facebook.com", "path": "/", "secure": True} for k, v in pairs]
+        for p in raw.split(";"):
+            if "=" in p:
+                k, v = p.strip().split("=", 1)
+                out.append({"name": k, "value": v, "domain": default_domain, "path": "/", "secure": True})
+    return out
 
 
 def playwright_proxy(url):
@@ -282,10 +295,13 @@ def pick_proxy(proxies):
 
 async def launch_browser(pw, headless=True):
     """Launch installed Chrome/Edge first, then Playwright's bundled Chromium."""
+    args = ["--disable-dev-shm-usage"]           # avoid /dev/shm crashes in containers
+    if os.environ.get("PLAYWRIGHT_NO_SANDBOX"):  # required when running as root in Docker
+        args.append("--no-sandbox")
     errors = []
     for channel in ("chrome", "msedge", None):
         try:
-            browser = await pw.chromium.launch(channel=channel, headless=headless)
+            browser = await pw.chromium.launch(channel=channel, headless=headless, args=args)
             return browser, channel or "chromium"
         except Exception as e:
             errors.append(f"{channel or 'chromium'}: {str(e).splitlines()[0][:100]}")
@@ -347,9 +363,17 @@ def save_session(data, state_path=STATE_PATH):
     return uid
 
 
-def normalize_user_session(raw):
-    """Accept what a user pastes — a `c_user=...; xs=...` string, a Cookie-Editor JSON export, or a
-    storage_state JSON — and return (account_id, cookie_string). Raises ValueError if not logged in."""
+# platform -> (cookies that must be present to count as logged in, cookie holding the account id)
+PLATFORM_AUTH = {
+    "facebook": (("c_user",), "c_user"),
+    "threads": (("sessionid",), "ds_user_id"),
+    "instagram": (("sessionid",), "ds_user_id"),
+}
+
+
+def normalize_user_session(raw, platform="facebook"):
+    """Accept what a user pastes — a cookie string, a Cookie-Editor JSON export, or a storage_state JSON —
+    and return (account_id, cookie_string). Raises ValueError if the required login cookies are missing."""
     raw = (raw or "").strip()
     if not raw:
         raise ValueError("Chưa dán cookie.")
@@ -360,9 +384,14 @@ def normalize_user_session(raw):
     else:
         pairs = [p.strip().split("=", 1) for p in raw.split(";") if "=" in p]
     pairs = [(k, v) for k, v in pairs if k]
-    uid = next((v for k, v in pairs if k == "c_user" and v not in (None, "", "0")), None)
-    if not uid:
-        raise ValueError("Không thấy cookie đăng nhập (c_user). Hãy đăng nhập facebook.com rồi export cookie của trang đó.")
+    names = {k for k, _ in pairs}
+    need, id_cookie = PLATFORM_AUTH.get(platform, PLATFORM_AUTH["facebook"])
+    missing = [n for n in need if n not in names]
+    if missing:
+        where = {"facebook": "facebook.com", "threads": "threads.com", "instagram": "instagram.com"}.get(platform, "")
+        raise ValueError(f"Không thấy cookie đăng nhập ({', '.join(missing)}). "
+                         f"Hãy đăng nhập rồi export cookie của {where}.")
+    uid = next((v for k, v in pairs if k == id_cookie and v not in (None, "", "0")), None) or "?"
     return uid, "; ".join(f"{k}={v}" for k, v in pairs)
 
 
