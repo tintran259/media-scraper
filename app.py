@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response as RawResponse
 
 import fb_browser
 import ig
@@ -374,9 +374,26 @@ def num(value, default, lo, hi, cast=int):
 
 # ---------------------------------------------------------------------- pages
 
+def public_base(request: Request) -> str:
+    """URL công khai của trang (để chèn vào thẻ Open Graph khi gửi link).
+
+    Ưu tiên biến môi trường PUBLIC_URL (đặt thủ công cho chắc, vd link Tailscale
+    Funnel/Cloudflare). Nếu không có, suy ra từ header do tunnel chuyển tới."""
+    env = (os.environ.get("PUBLIC_URL") or "").strip()
+    if env:
+        return env.rstrip("/")
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip() or request.url.scheme
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host")
+            or request.url.netloc).split(",")[0].strip()
+    return f"{proto}://{host}"
+
+
 @app.get("/")
 async def index(request: Request):
-    resp = FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
+    # đọc file mỗi lần để sửa giao diện là F5 thấy ngay (không cần restart app)
+    with open(os.path.join(BASE_DIR, "static", "index.html"), encoding="utf-8") as f:
+        html = f.read().replace("__PUBLIC_URL__", public_base(request))
+    resp = HTMLResponse(html)
     owner_id(request, resp)
     return resp
 
@@ -384,6 +401,48 @@ async def index(request: Request):
 @app.get("/admin")
 async def admin_page():
     return FileResponse(os.path.join(BASE_DIR, "static", "admin.html"))
+
+
+# ảnh thẻ xem trước (Open Graph). Tạo 1 lần bằng Pillow nếu có; thiếu Pillow thì
+# bỏ qua (link vẫn hiện thẻ chữ, chỉ không có ảnh).
+_OG_PATH = os.path.join(BASE_DIR, "static", "og.png")
+
+def _ensure_og_image() -> bool:
+    if os.path.exists(_OG_PATH):
+        return True
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return False
+    try:
+        W, H = 1200, 630
+        img = Image.new("RGB", (W, H), "#1b74e4")
+        d = ImageDraw.Draw(img)
+        d.rectangle([0, H - 150, W, H], fill="#1559b0")
+
+        def font(sz):
+            for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
+                try:
+                    return ImageFont.truetype(name, sz)
+                except Exception:
+                    continue
+            return ImageFont.load_default()
+
+        d.text((80, 150), "Cào bình luận", font=font(96), fill="#ffffff")
+        d.text((80, 270), "mạng xã hội", font=font(96), fill="#ffffff")
+        d.text((80, 470), "Facebook · Threads · Instagram  →  Excel / CSV",
+               font=font(40), fill="#dbe7ff")
+        img.save(_OG_PATH, "PNG")
+        return True
+    except Exception:
+        return False
+
+
+@app.get("/og.png")
+async def og_image():
+    if _ensure_og_image():
+        return FileResponse(_OG_PATH, media_type="image/png")
+    return RawResponse(status_code=404)
 
 
 # ------------------------------------------------------------------ user API
