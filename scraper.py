@@ -321,12 +321,44 @@ def find_key(obj, key, max_depth=4):
     return None
 
 
+def _top_reactions_edges(node, fb):
+    """Facebook puts per-type reactions (top_reactions) on the rich comment feedback, which may be
+    the outer feedback or the one nested under comment_action_links[].comment.feedback."""
+    edges = dig(fb, "top_reactions", "edges")
+    if isinstance(edges, list):
+        return edges
+    for link in (node.get("comment_action_links") or []):
+        edges = dig(link, "comment", "feedback", "top_reactions", "edges")
+        if isinstance(edges, list):
+            return edges
+    return None
+
+
+def reaction_breakdown(node, fb):
+    """Per-type reaction counts for a comment, when Facebook includes them (top_reactions).
+    Returns [{"key","count"}, ...] (key = reaction-type id, mapped to emoji at export) or None."""
+    edges = _top_reactions_edges(node, fb)
+    if not edges:
+        return None
+    out = []
+    for e in edges:
+        if not isinstance(e, dict):
+            continue
+        rn = e.get("node") or {}
+        cnt = parse_count(first(e.get("reaction_count"), e.get("count"), rn.get("reaction_count")))
+        key = first(rn.get("id"), rn.get("reaction_type"), rn.get("key"), rn.get("name"))
+        if cnt:
+            out.append({"key": str(key or ""), "count": cnt})
+    return out or None
+
+
 def to_record(node, parent_id):
     fb = node.get("feedback") or {}
     replies = fb.get("replies_fields") or {}
     reply_count = first(replies.get("count"), fb.get("total_reply_count"))
     reactions = parse_count(first(dig(fb, "reactors", "count"), dig(fb, "reactors", "count_reduced"),
                                   dig(fb, "unified_reactors", "count")))
+    reactions_detail = reaction_breakdown(node, fb)
     ts = node.get("created_time")
     created = datetime.fromtimestamp(ts, timezone.utc).isoformat() if isinstance(ts, (int, float)) else ts
     author = node.get("author") or {}
@@ -341,6 +373,7 @@ def to_record(node, parent_id):
         "text": dig(node, "body", "text"),
         "created_time": created,
         "reactions": reactions,
+        **({"reactions_detail": reactions_detail} if reactions_detail else {}),
         "reply_count": reply_count,                               # replies this viewer can see
         "reply_total": first(replies.get("total_count"), reply_count),  # what Facebook counts, incl. hidden
         "url": first(fb.get("url"), node.get("url")),
@@ -574,7 +607,7 @@ class Scraper:
             "node_keys": sorted(node)[:40] if node else None,
             "vars": {k: hide(k, v) for k, v in variables.items() if not k.startswith("__relay")},
         }, ensure_ascii=False) + "\n")
-        if save_raw and name != TOP_QUERY and self._raw_saved[name] < 4:
+        if save_raw and self._raw_saved[name] < (1 if name == TOP_QUERY else 4):
             self._raw_saved[name] += 1
             with open(os.path.join(self.debug_dir, f"{name}_{self._raw_saved[name]}.json"), "w", encoding="utf-8") as f:
                 json.dump({"label": label, "variables": variables, "chunks": chunks}, f, ensure_ascii=False)

@@ -625,13 +625,66 @@ def _sheet_name(title, used, fallback):
     return name
 
 
+def _rnum(v):
+    """Reaction count as a non-negative int (data may hold None or a numeric string)."""
+    try:
+        n = int(v)
+        return n if n > 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+# emoji cho từng loại cảm xúc Facebook (khớp theo reaction_type hoặc tên)
+REACTION_EMOJI = {
+    "LIKE": "👍", "LOVE": "❤️", "HAHA": "😆", "WOW": "😮", "SORRY": "😢", "SAD": "😢",
+    "ANGER": "😡", "ANGRY": "😡", "SUPPORT": "🤗", "CARE": "🤗", "THANKFUL": "🌸",
+    "THÍCH": "👍", "YÊU THÍCH": "❤️", "HAHA ": "😆", "WOW ": "😮", "BUỒN": "😢",
+    "PHẪN NỘ": "😡", "THƯƠNG THƯƠNG": "🤗",
+    "1635855486666999": "👍", "1678524932434102": "❤️", "115940658764963": "😆",
+    "478547315650144": "😮", "908563459236466": "😢", "444813342392137": "😡", "613557422527858": "🤗",
+}
+
+
+def _reactions_cell(it):
+    """Giá trị ô 'Tương tác': nếu có chi tiết từng loại cảm xúc thì hiện 'tổng (👍20 ❤️5)',
+    không có thì chỉ hiện số tổng."""
+    total = it["reactions"]
+    det = it.get("detail")
+    if not det:
+        return total
+    parts = []
+    for d in det:
+        sym = REACTION_EMOJI.get(str(d.get("key", "")).upper()) or d.get("label") or "?"
+        parts.append(f"{sym}{_rnum(d.get('count'))}")
+    return f"{total} ({' '.join(parts)})" if parts else total
+
+
 def _threaded(rows):
-    """(depth, reply_label, author, text, time) in threaded order: each comment then its numbered replies."""
+    """Threaded order; each item is a dict with depth, reply label, author, text, time,
+    own reactions and subtree total (self + all descendants). Top-level threads are sorted
+    by subtree total (most interactions first)."""
     from collections import defaultdict
-    children = defaultdict(list)
+    by_id, children = {}, defaultdict(list)
     for r in rows:
-        if r.get("parent_id"):
-            children[r["parent_id"]].append(r)
+        rid = r.get("id")
+        if rid is not None:
+            by_id.setdefault(rid, r)
+    for r in rows:
+        pid = r.get("parent_id")
+        if pid and pid in by_id:
+            children[pid].append(r)
+
+    total_cache = {}
+
+    def subtotal(r):
+        rid = r.get("id")
+        if rid in total_cache:            # also guards against cycles
+            return total_cache[rid]
+        total_cache[rid] = 0
+        s = _rnum(r.get("reactions")) + sum(subtotal(c) for c in children.get(rid, []))
+        total_cache[rid] = s
+        return s
+
     out, seen = [], set()
 
     def walk(r, depth, label):
@@ -639,33 +692,86 @@ def _threaded(rows):
         if rid in seen:
             return
         seen.add(rid)
-        out.append((depth, label, r.get("author_name") or "", r.get("text") or "", r.get("created_time")))
+        out.append({"depth": depth, "label": label, "author": r.get("author_name") or "",
+                    "text": r.get("text") or "", "time": r.get("created_time"),
+                    "reactions": _rnum(r.get("reactions")), "detail": r.get("reactions_detail"),
+                    "total": subtotal(r), "top": depth == 0})
         for i, child in enumerate(children.get(rid, []), 1):
             walk(child, depth + 1, f"Reply {i}")
 
-    for r in rows:
-        if not r.get("parent_id"):
-            walk(r, 0, None)
-    for r in rows:                       # replies whose parent is missing -> show on their own line
+    # top-level = no parent, or parent not present in this dataset (orphaned reply)
+    tops = [r for r in rows if not (r.get("parent_id") and r.get("parent_id") in by_id)]
+    tops.sort(key=subtotal, reverse=True)           # thread hot nhất lên đầu (sort ổn định)
+    for r in tops:
+        walk(r, 0, None)
+    for r in rows:                                  # safety: bất kỳ dòng nào còn sót
         if r.get("id") not in seen:
             walk(r, 0, None)
     return out
 
 
+def _comment_richtext(label, author, text):
+    """Ô bình luận: chỉ bôi đậm tên user, phần còn lại để thường."""
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+    parts = []
+    if label:
+        parts.append(f"{label} — ")
+    if author:
+        parts.append(TextBlock(InlineFont(b=True), author))
+        parts.append(": " + (text or ""))
+    else:
+        parts.append(text or "")
+    return CellRichText(parts)
+
+
 def _write_sheet(ws, rows):
-    from openpyxl.styles import Alignment, Font
-    ws.append(["Bình luận", "Thời gian"])
-    ws["A1"].font = ws["B1"].font = Font(bold=True)
-    for depth, label, author, text, t in _threaded(rows):
-        head = f"{label} — " if label else ""
-        body = f"{author}: {text}" if author else text
-        ws.append([head + body, _fmt_time(t)])
-        cell = ws.cell(ws.max_row, 1)
-        cell.alignment = Alignment(indent=min(depth, 8), wrap_text=True, vertical="top")
-        if depth == 0:
-            cell.font = Font(bold=True)
-    ws.column_dimensions["A"].width = 95
-    ws.column_dimensions["B"].width = 18
+    from openpyxl.styles import Alignment, Font, Border, Side
+    headers = ["STT", "Bình luận", "Thời gian", "Tương tác", "Tổng số tương tác"]
+    ws.append(headers)
+    bold = Font(bold=True)
+    for col in range(1, len(headers) + 1):
+        ws.cell(1, col).font = bold
+    sep = Side(style="medium", color="000000")      # line đậm ngăn các thread reply cha
+    right = Alignment(horizontal="right", vertical="top")
+    center = Alignment(horizontal="center", vertical="center")   # cho ô "Tổng" gộp
+
+    items = _threaded(rows)
+    has_detail = any(it.get("detail") for it in items)
+    stt, first_top = 0, True
+    g_start, g_total = None, 0                       # ô "Tổng số tương tác" gộp theo từng thread
+
+    def close_group(end_row):
+        if g_start is None:
+            return
+        ws.cell(g_start, 5).value = g_total
+        ws.cell(g_start, 5).font = bold
+        if end_row > g_start:
+            ws.merge_cells(start_row=g_start, start_column=5, end_row=end_row, end_column=5)
+        ws.cell(g_start, 5).alignment = center
+
+    for it in items:
+        stt += 1
+        if it["top"] and g_start is not None:        # chốt thread trước khi mở thread mới
+            close_group(ws.max_row)
+        ws.append([stt, None, _fmt_time(it["time"]), _reactions_cell(it), None])
+        row = ws.max_row
+        ws.cell(row, 2).value = _comment_richtext(it["label"], it["author"], it["text"])
+        ws.cell(row, 1).alignment = Alignment(horizontal="center", vertical="top")
+        ws.cell(row, 2).alignment = Alignment(indent=min(it["depth"], 8), wrap_text=True, vertical="top")
+        ws.cell(row, 4).alignment = right
+        if it["top"]:
+            g_start, g_total = row, it["total"]
+            for col in (1, 3, 4):                    # đậm STT / thời gian / tương tác ở dòng cha (không đậm nội dung)
+                ws.cell(row, col).font = bold
+            if not first_top:                        # kẻ line đậm phía trên mỗi thread (trừ thread đầu)
+                for col in range(1, len(headers) + 1):
+                    ws.cell(row, col).border = Border(top=sep)
+            first_top = False
+    close_group(ws.max_row)                          # chốt thread cuối
+
+    for col, w in zip("ABCDE", (6, 85, 18, 26 if has_detail else 11, 16)):
+        ws.column_dimensions[col].width = w
     ws.freeze_panes = "A2"
 
 
