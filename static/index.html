@@ -289,6 +289,13 @@ async function refreshSession() {
     else if (s.shared) { b.textContent = 'Dùng tài khoản chung'; b.className = 'badge'; }
     else { b.textContent = 'Chế độ khách'; b.className = 'badge'; }
     $('#ttlDays').textContent = s.ttl_days;
+    // phản ánh đúng trạng thái đăng nhập ngay dưới ô link (tránh hiểu nhầm "chế độ khách")
+    if (id === 'threads' || id === 'instagram') {
+      const max = MAX_LINKS ? ` Tối đa ${MAX_LINKS} bài mỗi lần.` : '';
+      $('#scopeHint').innerHTML = (s.account_id
+        ? `✅ Đang cào bằng tài khoản <b>đã đăng nhập</b> (${esc(s.account_id)}). Nếu số lấy được vẫn ít hơn số hiển thị, phần thiếu là bình luận/trả lời bị nền tảng ẩn hoặc lọc — không lấy thêm được.`
+        : (PLATFORM_HINT[id] || '')) + max;
+    }
   } catch {}
 }
 $('#saveSess').onclick = async () => {
@@ -376,9 +383,11 @@ function rowHtml(j) {
   const barCls = j.status === 'done' ? 'done' : (j.status === 'running' && !total ? 'indet' : '');
   const eta = j.status === 'running' && total && rate > 0 && count < total ? `còn ~${fmtDur((total - count) / rate)}` : '';
 
+  // xong nhưng có luồng dừng sớm (lỗi/kẹt) -> vẫn còn data, cho phép Tiếp tục
+  const incomplete = (j.streams || []).length > 0 && !j.streams.every(s => s.stop === 'end');
   const acts = [];
   if (active) acts.push(`<button class="sm" data-act="stop" data-id="${j.id}">Dừng</button>`);
-  else if (j.status !== 'done' || j.message) acts.push(`<button class="sm" data-act="resume" data-id="${j.id}">Tiếp tục</button>`);
+  else if (j.status !== 'done' || j.message || incomplete) acts.push(`<button class="sm primary" data-act="resume" data-id="${j.id}">Tiếp tục</button>`);
   if (count) acts.push(`<a class="btn sm" href="${withToken(`/api/jobs/${j.id}/download?fmt=xlsx`)}">Excel</a>`,
                        `<a class="btn sm ghost" href="${withToken(`/api/jobs/${j.id}/download?fmt=csv`)}">CSV</a>`,
                        `<a class="btn sm ghost" href="${withToken(`/api/jobs/${j.id}/download?fmt=jsonl`)}">JSONL</a>`);
@@ -456,7 +465,7 @@ const PLATFORM_PLACEHOLDER = {
 };
 const PLATFORM_HINT = {
   facebook: 'Hỗ trợ bài viết <b>công khai</b>: trang, nhóm công khai, video, reel. Lấy cả bình luận và phản hồi.',
-  threads: 'Dán link bài Threads (threads.com/@user/post/...). Hiện lấy trả lời công khai ở chế độ khách.',
+  threads: 'Dán link bài Threads (threads.com/@user/post/...). Có cookie Threads thì cào bằng tài khoản đó; chưa có thì ở chế độ khách (lấy được ít hơn).',
   instagram: 'Dán link bài/reel Instagram. <b>Bắt buộc đăng nhập</b> (thêm cookie Instagram bên trên). Hiện lấy bình luận cấp 1.',
 };
 let activePlatform = 'facebook';

@@ -318,9 +318,11 @@ def streams_view(s):
     if isinstance(streams, dict) and streams:  # Facebook: one stream per sort order
         return [{"order": core.INTENT_NAMES.get(x["intent"], x["intent"]), "pages": x["pages"], "new": x["new"],
                  "stop": x["stop"], "last_size": x["last_size"]} for x in streams.values()]
-    # Threads / simple scrapers: a single reply stream
-    return [{"order": "replies", "pages": getattr(s, "pages", 0), "new": len(getattr(s, "seen", ())),
-             "stop": "end" if getattr(s, "done", False) else None, "last_size": None}]
+    # Threads / simple scrapers: a single reply stream. ThreadsScraper exposes `top_done`/`top_pages`
+    # (not `done`/`pages`); mark the stream ended when root pagination is exhausted.
+    done = getattr(s, "top_done", getattr(s, "done", False))
+    return [{"order": "replies", "pages": getattr(s, "top_pages", getattr(s, "pages", 0)),
+             "new": len(getattr(s, "seen", ())), "stop": "end" if done else None, "last_size": None}]
 
 
 # ----------------------------------------------------------- users and admin
