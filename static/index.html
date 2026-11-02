@@ -385,9 +385,13 @@ function rowHtml(j) {
 
   // xong nhưng có luồng dừng sớm (lỗi/kẹt) -> vẫn còn data, cho phép Tiếp tục
   const incomplete = (j.streams || []).length > 0 && !j.streams.every(s => s.stop === 'end');
+  // Threads/IG đã "hết": quét lại để gom thêm (mỗi lượt feed trả tập khác nhau, gộp loại trùng)
+  const resweepable = !active && count > 0 && !incomplete && j.status === 'done'
+                      && (j.platform === 'threads' || j.platform === 'instagram');
   const acts = [];
   if (active) acts.push(`<button class="sm" data-act="stop" data-id="${j.id}">Dừng</button>`);
   else if (j.status !== 'done' || j.message || incomplete) acts.push(`<button class="sm primary" data-act="resume" data-id="${j.id}">Tiếp tục</button>`);
+  else if (resweepable) acts.push(`<button class="sm primary" data-act="resweep" data-id="${j.id}" title="Quét lại để gom thêm bình luận Threads/IG trả về khác lần trước (gộp, không trùng). Bấm vài lần để tích luỹ.">Gom thêm</button>`);
   if (count) acts.push(`<a class="btn sm" href="${withToken(`/api/jobs/${j.id}/download?fmt=xlsx`)}">Excel</a>`,
                        `<a class="btn sm ghost" href="${withToken(`/api/jobs/${j.id}/download?fmt=csv`)}">CSV</a>`,
                        `<a class="btn sm ghost" href="${withToken(`/api/jobs/${j.id}/download?fmt=jsonl`)}">JSONL</a>`);

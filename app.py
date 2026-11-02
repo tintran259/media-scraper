@@ -552,6 +552,40 @@ async def resume_job(jid: str, request: Request, uid: str = Depends(owner_id)):
     return {"ok": True}
 
 
+# Threads/Instagram trả bình luận theo feed xếp hạng — mỗi lượt cho một tập khác nhau.
+# "Gom thêm" quét lại từ đầu NHƯNG giữ nguyên dữ liệu đã có (chống trùng theo id),
+# nên lặp lại vài lần sẽ tích luỹ thêm bình luận mới. Reset cờ "đã hết" của phase gốc.
+RESWEEP_RESET = {
+    "threads": {"root_done": False, "root_cursor": None},
+    "instagram": {"done": False, "cursor": None},
+}
+
+
+@app.post("/api/jobs/{jid}/resweep")
+async def resweep_job(jid: str, request: Request, uid: str = Depends(owner_id)):
+    j = get_job(jid, uid, request)
+    plat = j.get("platform")
+    if plat not in RESWEEP_RESET:
+        raise HTTPException(400, "Chỉ gom thêm được cho Threads/Instagram.")
+    if j["status"] in ACTIVE or j["status"] == "queued":
+        return {"ok": True}
+    sp = os.path.join(job_dir(jid), "state.json")
+    try:
+        with open(sp, encoding="utf-8") as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        st = {}
+    st.update(RESWEEP_RESET[plat])
+    tmp = sp + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f, ensure_ascii=False)
+    os.replace(tmp, sp)
+    j.update(status="queued", message=None)
+    save_jobs()
+    pump()
+    return {"ok": True}
+
+
 @app.delete("/api/jobs/{jid}")
 async def delete_job(jid: str, request: Request, uid: str = Depends(owner_id)):
     j = get_job(jid, uid, request)
